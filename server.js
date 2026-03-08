@@ -107,6 +107,7 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   const colNames = cols.map(c => c.Field);
 
   const fieldMap = {
+    user_id:                 req.user.user_id,           // ✅ ดึงจาก token
     first_name:              req.body.first_name,
     last_name:               req.body.last_name,
     birth_date:              req.body.birth_date,
