@@ -68,13 +68,37 @@ app.post('/api/logout', auth, (req, res) => res.json({ success: true }));
 
 // ================= DASHBOARD =================
 app.get('/api/dashboard', auth, asyncHandler(async (req, res) => {
-  const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM Patients`);
+  // สร้าง column status ถ้ายังไม่มี
+  try {
+    const [cols] = await pool.query("SHOW COLUMNS FROM Patients LIKE 'status'");
+    if (cols.length === 0) {
+      await pool.execute("ALTER TABLE Patients ADD COLUMN status ENUM('active','followup','completed') NOT NULL DEFAULT 'active'");
+    }
+  } catch (e) { console.error('alter status:', e.message); }
+
+  const [[count]] = await pool.query('SELECT COUNT(*) AS total FROM Patients');
+  const [[sc]] = await pool.query(`
+    SELECT
+      SUM(CASE WHEN status='active'    THEN 1 ELSE 0 END) AS active_patients,
+      SUM(CASE WHEN status='followup'  THEN 1 ELSE 0 END) AS followup_patients,
+      SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed_patients
+    FROM Patients
+  `);
   res.json({
-    total_patients: count.total,
-    active_patients: 0,
-    followup_patients: 0,
-    completed_patients: 0
+    total_patients:     count.total,
+    active_patients:    sc.active_patients    || 0,
+    followup_patients:  sc.followup_patients  || 0,
+    completed_patients: sc.completed_patients || 0
   });
+}));
+
+// อัปเดตสถานะผู้ป่วย
+app.put('/api/patients/:id/status', auth, asyncHandler(async (req, res) => {
+  const { status } = req.body;
+  if (!['active','followup','completed'].includes(status))
+    return res.status(400).json({ error: 'สถานะไม่ถูกต้อง' });
+  await pool.execute('UPDATE Patients SET status = ? WHERE patient_id = ?', [status, req.params.id]);
+  res.json({ success: true });
 }));
 
 // ================= PATIENTS =================
@@ -90,6 +114,7 @@ app.get('/api/patients', auth, asyncHandler(async (req, res) => {
        p.gender,
        p.injured_side,
        p.injured_part,
+       COALESCE(p.status, 'active') AS status,
        COUNT(es.session_id) AS total_sessions,
        COALESCE(AVG(es.accuracy_percent), 0) AS avg_score
      FROM Patients p
@@ -106,18 +131,8 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   const [cols] = await pool.query('SHOW COLUMNS FROM Patients');
   const colNames = cols.map(c => c.Field);
 
-  // ถ้ายังไม่มี column status ให้สร้างก่อน
-  if (!colNames.includes('status')) {
-    try {
-      await pool.execute(`ALTER TABLE Patients ADD COLUMN status ENUM('active','followup','completed') NOT NULL DEFAULT 'active'`);
-      colNames.push('status');
-    } catch (e) {
-      console.error('ALTER TABLE status error:', e.message);
-    }
-  }
-
   const fieldMap = {
-    user_id:                 req.user.user_id,
+    user_id:                 req.user.user_id,           // ✅ ดึงจาก token
     first_name:              req.body.first_name,
     last_name:               req.body.last_name,
     birth_date:              req.body.birth_date,
@@ -135,9 +150,6 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   const values      = validFields.map(f => fieldMap[f]);
   const fieldList   = validFields.join(', ');
   const placeholders = validFields.map(() => '?').join(', ');
-
-  console.log('INSERT fields:', fieldList);
-  console.log('INSERT values:', JSON.stringify(values));
 
   const [result] = await pool.execute(
     `INSERT INTO Patients (${fieldList}) VALUES (${placeholders})`,
@@ -181,7 +193,7 @@ app.put('/api/patients/:id', auth, asyncHandler(async (req, res) => {
     patient_phone:             req.body.patient_phone  || null,
     emergency_contact_name:    req.body.emergency_contact_name  || null,
     emergency_contact_phone:   req.body.emergency_contact_phone || null,
-    status:                    req.body.status         || null,
+    status:                    req.body.status || null,
   };
 
   const validFields = Object.keys(fieldMap).filter(f => colNames.includes(f));
