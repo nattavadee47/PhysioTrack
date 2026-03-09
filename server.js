@@ -68,41 +68,13 @@ app.post('/api/logout', auth, (req, res) => res.json({ success: true }));
 
 // ================= DASHBOARD =================
 app.get('/api/dashboard', auth, asyncHandler(async (req, res) => {
-  // ตรวจสอบว่ามี column status หรือไม่ ถ้าไม่มีให้สร้าง
-  try {
-    const [cols] = await pool.query(`SHOW COLUMNS FROM Patients LIKE 'status'`);
-    if (cols.length === 0) {
-      await pool.execute(`ALTER TABLE Patients ADD COLUMN status ENUM('active','followup','completed') NOT NULL DEFAULT 'active'`);
-    }
-  } catch (e) {
-    console.error('alter table error:', e.message);
-  }
-
   const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM Patients`);
-  const [[statusCounts]] = await pool.query(`
-    SELECT
-      SUM(CASE WHEN status = 'active'    THEN 1 ELSE 0 END) AS active_patients,
-      SUM(CASE WHEN status = 'followup'  THEN 1 ELSE 0 END) AS followup_patients,
-      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_patients
-    FROM Patients
-  `);
   res.json({
-    total_patients:     count.total,
-    active_patients:    statusCounts.active_patients    || 0,
-    followup_patients:  statusCounts.followup_patients  || 0,
-    completed_patients: statusCounts.completed_patients || 0
+    total_patients: count.total,
+    active_patients: 0,
+    followup_patients: 0,
+    completed_patients: 0
   });
-}));
-
-// ================= UPDATE PATIENT STATUS =================
-app.put('/api/patients/:id/status', auth, asyncHandler(async (req, res) => {
-  const { status } = req.body;
-  const validStatuses = ['active', 'followup', 'completed'];
-  if (!validStatuses.includes(status)) {
-    return res.status(400).json({ error: 'สถานะไม่ถูกต้อง' });
-  }
-  await pool.execute(`UPDATE Patients SET status = ? WHERE patient_id = ?`, [status, req.params.id]);
-  res.json({ success: true });
 }));
 
 // ================= PATIENTS =================
@@ -118,7 +90,6 @@ app.get('/api/patients', auth, asyncHandler(async (req, res) => {
        p.gender,
        p.injured_side,
        p.injured_part,
-       COALESCE(p.status, 'active') AS status,
        COUNT(es.session_id) AS total_sessions,
        COALESCE(AVG(es.accuracy_percent), 0) AS avg_score
      FROM Patients p
@@ -135,8 +106,18 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   const [cols] = await pool.query('SHOW COLUMNS FROM Patients');
   const colNames = cols.map(c => c.Field);
 
+  // ถ้ายังไม่มี column status ให้สร้างก่อน
+  if (!colNames.includes('status')) {
+    try {
+      await pool.execute(`ALTER TABLE Patients ADD COLUMN status ENUM('active','followup','completed') NOT NULL DEFAULT 'active'`);
+      colNames.push('status');
+    } catch (e) {
+      console.error('ALTER TABLE status error:', e.message);
+    }
+  }
+
   const fieldMap = {
-    user_id:                 req.user.user_id,           // ✅ ดึงจาก token
+    user_id:                 req.user.user_id,
     first_name:              req.body.first_name,
     last_name:               req.body.last_name,
     birth_date:              req.body.birth_date,
@@ -147,12 +128,16 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
     patient_phone:           req.body.patient_phone  || null,
     emergency_contact_name:  req.body.emergency_contact_name  || null,
     emergency_contact_phone: req.body.emergency_contact_phone || null,
+    status:                  'active',
   };
 
   const validFields = Object.keys(fieldMap).filter(f => colNames.includes(f));
   const values      = validFields.map(f => fieldMap[f]);
   const fieldList   = validFields.join(', ');
   const placeholders = validFields.map(() => '?').join(', ');
+
+  console.log('INSERT fields:', fieldList);
+  console.log('INSERT values:', JSON.stringify(values));
 
   const [result] = await pool.execute(
     `INSERT INTO Patients (${fieldList}) VALUES (${placeholders})`,
@@ -196,6 +181,7 @@ app.put('/api/patients/:id', auth, asyncHandler(async (req, res) => {
     patient_phone:             req.body.patient_phone  || null,
     emergency_contact_name:    req.body.emergency_contact_name  || null,
     emergency_contact_phone:   req.body.emergency_contact_phone || null,
+    status:                    req.body.status         || null,
   };
 
   const validFields = Object.keys(fieldMap).filter(f => colNames.includes(f));
