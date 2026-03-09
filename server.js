@@ -132,7 +132,7 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   const colNames = cols.map(c => c.Field);
 
   const fieldMap = {
-    user_id:                 req.user.user_id,           // ✅ ดึงจาก token
+    user_id:                 req.user.user_id,
     first_name:              req.body.first_name,
     last_name:               req.body.last_name,
     birth_date:              req.body.birth_date,
@@ -140,9 +140,9 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
     injured_side:            req.body.injured_side   || null,
     injured_part:            req.body.injured_part   || null,
     diagnosis:               req.body.diagnosis      || null,
-    patient_phone:           req.body.patient_phone  || null,
-    emergency_contact_name:  req.body.emergency_contact_name  || null,
-    emergency_contact_phone: req.body.emergency_contact_phone || null,
+    patient_phone:           req.body.patient_phone?.replace(/\D/g, '').slice(0, 10) || null,
+    emergency_contact_name:  req.body.emergency_contact_name?.slice(0, 100)          || null,
+    emergency_contact_phone: req.body.emergency_contact_phone?.replace(/\D/g, '').slice(0, 10) || null,
     status:                  'active',
   };
 
@@ -157,7 +157,6 @@ app.post('/api/patients', auth, asyncHandler(async (req, res) => {
   );
   res.json({ success: true, patient_id: result.insertId });
 }));
-
 // ดูข้อมูลผู้ป่วยรายบุคคล
 app.get('/api/patients/:id', auth, asyncHandler(async (req, res) => {
   // ดึง column จริงก่อน เพื่อป้องกัน column ไม่มีใน DB
