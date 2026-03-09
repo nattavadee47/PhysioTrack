@@ -233,6 +233,8 @@ app.get('/api/patients/:id/training-results', auth, asyncHandler(async (req, res
     `SELECT 
        es.session_date,
        e.name_th AS exercise_name,
+       COALESCE(es.actual_reps_left,  0) AS actual_reps_left,
+       COALESCE(es.actual_reps_right, 0) AS actual_reps_right,
        es.actual_reps AS score,
        es.accuracy_percent AS accuracy,
        ROUND(es.duration_seconds / 60, 2) AS duration_minutes,
