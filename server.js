@@ -68,13 +68,41 @@ app.post('/api/logout', auth, (req, res) => res.json({ success: true }));
 
 // ================= DASHBOARD =================
 app.get('/api/dashboard', auth, asyncHandler(async (req, res) => {
+  // ตรวจสอบว่ามี column status หรือไม่ ถ้าไม่มีให้สร้าง
+  try {
+    const [cols] = await pool.query(`SHOW COLUMNS FROM Patients LIKE 'status'`);
+    if (cols.length === 0) {
+      await pool.execute(`ALTER TABLE Patients ADD COLUMN status ENUM('active','followup','completed') NOT NULL DEFAULT 'active'`);
+    }
+  } catch (e) {
+    console.error('alter table error:', e.message);
+  }
+
   const [[count]] = await pool.query(`SELECT COUNT(*) AS total FROM Patients`);
+  const [[statusCounts]] = await pool.query(`
+    SELECT
+      SUM(CASE WHEN status = 'active'    THEN 1 ELSE 0 END) AS active_patients,
+      SUM(CASE WHEN status = 'followup'  THEN 1 ELSE 0 END) AS followup_patients,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_patients
+    FROM Patients
+  `);
   res.json({
-    total_patients: count.total,
-    active_patients: 0,
-    followup_patients: 0,
-    completed_patients: 0
+    total_patients:     count.total,
+    active_patients:    statusCounts.active_patients    || 0,
+    followup_patients:  statusCounts.followup_patients  || 0,
+    completed_patients: statusCounts.completed_patients || 0
   });
+}));
+
+// ================= UPDATE PATIENT STATUS =================
+app.put('/api/patients/:id/status', auth, asyncHandler(async (req, res) => {
+  const { status } = req.body;
+  const validStatuses = ['active', 'followup', 'completed'];
+  if (!validStatuses.includes(status)) {
+    return res.status(400).json({ error: 'สถานะไม่ถูกต้อง' });
+  }
+  await pool.execute(`UPDATE Patients SET status = ? WHERE patient_id = ?`, [status, req.params.id]);
+  res.json({ success: true });
 }));
 
 // ================= PATIENTS =================
@@ -90,6 +118,7 @@ app.get('/api/patients', auth, asyncHandler(async (req, res) => {
        p.gender,
        p.injured_side,
        p.injured_part,
+       COALESCE(p.status, 'active') AS status,
        COUNT(es.session_id) AS total_sessions,
        COALESCE(AVG(es.accuracy_percent), 0) AS avg_score
      FROM Patients p
